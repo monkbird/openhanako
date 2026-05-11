@@ -487,7 +487,22 @@ export class SessionCoordinator {
     // Wrap resourceLoader: per-session prompt snapshot + plan mode injection + vision auxiliary extension
     const resourceLoaderProps = {
       getSystemPrompt: {
-        value: () => systemPromptSnapshot,
+        value: () => {
+          // 每次模型调用时替换 Current date and time 为实时时间
+          const tz = this._d.getPrefs?.()?.getTimezone?.()
+            || Intl.DateTimeFormat().resolvedOptions().timeZone;
+          const now = new Date();
+          const fmtOpts = {
+            weekday: "long", year: "numeric", month: "long", day: "numeric",
+            hour: "2-digit", minute: "2-digit", timeZoneName: "short",
+            ...(tz ? { timeZone: tz } : {}),
+          };
+          const timeStr = now.toLocaleString("en-US", fmtOpts);
+          return systemPromptSnapshot.replace(
+            /^Current date and time: .+$/m,
+            `Current date and time: ${timeStr}`,
+          );
+        },
       },
       getExtensions: {
         value: () => {

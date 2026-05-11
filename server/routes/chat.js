@@ -543,6 +543,8 @@ export function createChatRoute(engine, hub, { upgradeWebSocket }) {
           feedCardPipeline(evt.data);
         } else if (evt.type === "mood_text") {
           emitStreamEvent(sessionPath, ss, { type: "mood_text", delta: evt.data });
+        } else if (evt.type === "mood_end") {
+          emitStreamEvent(sessionPath, ss, { type: "mood_end" });
         }
       });
       ss.cardParser.flush((cEvt) => {

@@ -93,13 +93,23 @@ export function ProviderModelList({ providerId, summary, onRefresh }: {
 
   const removeModelFromProvider = async (mid: string) => {
     try {
-      const next = rawModels.filter((m: any) => (typeof m === 'object' ? m.id : m) !== mid);
-      await hanaFetch('/api/config', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ providers: { [providerId]: { models: next } } }),
-      });
-      invalidateConfigCache();
+      if (summary.supports_oauth) {
+        const res = await hanaFetch(`/api/auth/oauth/${providerId}/custom-models`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ modelId: mid }),
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+      } else {
+        const next = rawModels.filter((m: any) => (typeof m === 'object' ? m.id : m) !== mid);
+        await hanaFetch('/api/config', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ providers: { [providerId]: { models: next } } }),
+        });
+        invalidateConfigCache();
+      }
       await onRefresh();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);

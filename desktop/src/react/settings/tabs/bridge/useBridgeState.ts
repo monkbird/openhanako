@@ -1,7 +1,7 @@
 /**
  * Bridge state management hook — loads status, saves config, tests platforms.
  */
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSettingsStore } from '../../store';
 import { hanaFetch } from '../../api';
 import { loadSettingsConfig } from '../../actions';
@@ -93,7 +93,7 @@ export function useBridgeState() {
     }
   };
 
-  const loadStatus = async (signal?: AbortSignal) => {
+  const loadStatus = useCallback(async (signal?: AbortSignal) => {
     try {
       const query = selectedAgentId ? `?agentId=${encodeURIComponent(selectedAgentId)}` : '';
       const res = await hanaFetch(`/api/bridge/status${query}`, signal ? { signal } : undefined);
@@ -117,13 +117,13 @@ export function useBridgeState() {
     const ac = new AbortController();
     loadStatus(ac.signal);
     return () => ac.abort();
-  }, [selectedAgentId]);
+  }, [selectedAgentId, loadStatus]);
 
   useEffect(() => {
     const handler = () => loadStatus();
     window.addEventListener('hana-bridge-reload', handler);
     return () => window.removeEventListener('hana-bridge-reload', handler);
-  }, [selectedAgentId]);
+  }, [selectedAgentId, loadStatus]);
 
   const saveBridgeConfig = async (plat: string, credentials: Record<string, string> | null, enabled?: boolean) => {
     // Snapshot agentId at call time to avoid stale closure

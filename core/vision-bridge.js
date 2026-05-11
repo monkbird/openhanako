@@ -607,7 +607,7 @@ export class VisionBridge {
           img,
         ],
       }],
-      maxTokens: 900,
+      maxTokens: 4096,
       timeoutMs: VISION_ANALYSIS_TIMEOUT_MS,
     }));
   }
