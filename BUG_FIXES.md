@@ -53,7 +53,9 @@
 
 ### #671 — 私聊列表同一 Agent 重复显示
 
-**状态**：📋 前端类
+**状态**：✅ 已修复
+**文件**：`server/routes/bridge.js`
+**修复**：`/bridge/sessions` 端点对 DM 会话按 `platform:userId` 去重，同一用户多次接入只保留最后活跃的一条会话记录。
 
 ---
 
@@ -121,6 +123,8 @@
 | `core/llm-client.js` | `<think>`/`<thinking>` 正则增强，支持未闭合标签 |
 | `lib/memory/compiled-memory-state.js` | `normalizeCompiledSectionBody` 添加 think 标签剥离 |
 | `lib/memory/session-summary.js` | `rollingSummary` 输出后剥离 think 标签 |
+| `lib/bridge/telegram-adapter.js` | 启动时 `deleteWebhook` 清理 + token 有效性校验（修复 #737） |
+| `server/routes/bridge.js` | `/bridge/sessions` DM 会话按 userId 去重（修复 #671） |
 | `BUG_FIXES.md` | 实时跟踪文档 |
 
 *本文件由修复任务实时更新。*

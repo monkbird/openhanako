@@ -254,7 +254,20 @@ export function createBridgeRoute(engine, bridgeManagerRef) {
 
     // 按最后活跃时间排序
     sessions.sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0));
-    return c.json({ sessions });
+
+    // DM 会话按 userId 去重（同一用户多次接入只保留最新一条）
+    const seen = new Map();
+    const deduped = [];
+    for (const s of sessions) {
+      if (s.chatType === "dm" && s.userId) {
+        const key = `${s.platform}:${s.userId}`;
+        if (seen.has(key)) continue;
+        seen.set(key, true);
+      }
+      deduped.push(s);
+    }
+
+    return c.json({ sessions: deduped });
   });
 
   /** 读取指定 bridge session 的消息 */

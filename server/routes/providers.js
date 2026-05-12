@@ -233,6 +233,20 @@ export function createProvidersRoute(engine) {
     }));
   }
 
+  /** 通用模型名启发式检测视觉能力（用于 API 不返回 capabilities 的 provider） */
+  const VISION_NAME_PATTERNS = [/^gemma-[34]/i, /\bllava\b/i, /\bbakllava\b/i, /\bvision\b/i, /\bmultimodal\b/i, /[_-]vl[_-]/i, /\bcogvlm\b/i, /\bflorence\b/i, /\bidefics\b/i, /\bfuyu\b/i, /\bminicpm[_-]v\b/i, /\binternvl\b/i, /\bqwen2[_-]vl\b/i, /\bdeepseek[_-]vl\b/i, /\byi[_-]vl\b/i];
+  function _enrichVisionFromName(models) {
+    if (!models?.length) return models;
+    for (const model of models) {
+      if (model.image) continue;
+      const mid = (model.id || "").toLowerCase();
+      if (VISION_NAME_PATTERNS.some(p => p.test(mid))) {
+        model.image = true;
+      }
+    }
+    return models;
+  }
+
   function filterProviderModels(name, models, baseUrl = "") {
     const { models: filtered, ignoredModels } = filterDiscoveredProviderModels(name, models, { baseUrl });
     const payload = { models: filtered };
@@ -281,15 +295,9 @@ export function createProvidersRoute(engine) {
   /** Ollama 原生 API 不返回 capabilities，通过模型名启发式 + /api/tags 检测视觉模型 */
   async function _enrichOllamaVision(models, baseUrl) {
     if (!models?.length) return models;
-    const visionPatterns = [/^gemma-[34]/i, /\bllava\b/i, /\bbakllava\b/i, /\bvision\b/i, /\bmultimodal\b/i, /[_-]vl[_-]/i, /\bcogvlm\b/i, /\bflorence\b/i, /\bidefics\b/i, /\bfuyu\b/i, /\bminicpm[_-]v\b/i, /\binternvl\b/i, /\bqwen2[_-]vl\b/i, /\bdeepseek[_-]vl\b/i, /\byi[_-]vl\b/i];
 
-    // 先走 pattern 匹配（同步，零开销）
-    for (const model of models) {
-      const mid = (model.id || "").toLowerCase();
-      if (visionPatterns.some(p => p.test(mid))) {
-        model.image = true;
-      }
-    }
+    // 先走 pattern 匹配（复用通用视觉启发式）
+    _enrichVisionFromName(models);
 
     // 再尝试 Ollama 原生 /api/tags 补充检测（静默失败不阻塞）
     try {
@@ -368,7 +376,12 @@ export function createProvidersRoute(engine) {
           const data = await res.json();
           let remoteModels = normalizeRemoteModels(data, effectiveApi);
 
-          // Ollama：远程 API 不返回 capabilities，通过模型名启发式 + /api/tags 检测视觉模型
+          // 通用视觉启发式：对不返回 capability 的 provider，从模型名推断视觉能力
+          if (effectiveApi !== "anthropic-messages" && effectiveApi !== "google-generative-ai") {
+            _enrichVisionFromName(remoteModels);
+          }
+
+          // Ollama：额外走 /api/tags 补充检测（在 _enrichVisionFromName 之上补充）
           if (name === "ollama") {
             remoteModels = await _enrichOllamaVision(remoteModels, effectiveBaseUrl);
           }
