@@ -77,6 +77,26 @@
 
 ---
 
+## 批次三：记忆系统与工具调用稳定性
+
+### #848 — 记忆文件被 `<think>` 标签污染
+
+**状态**：✅ 已修复
+**文件**：`core/llm-client.js`, `lib/memory/compiled-memory-state.js`, `lib/memory/session-summary.js`
+**修复**：
+1. `callText()` — `<think>`/`<thinking>` 正则增强，支持未闭合标签
+2. `normalizeCompiledSectionBody()` — 记忆编译器输出统一剥离 think 标签
+3. `rollingSummary()` — 会话滚动摘要输出后剥离 think 标签
+
+### #855 — 空工具调用名 & 文本 XML 误解析为工具调用
+
+**状态**：🔍 无法完全修复（依赖 Pi SDK 内部行为）
+**分析**：
+- **Bug 1（空工具名）**：`isToolCallBlock()` 在 `core/llm-utils.js:55` 已有 `!!b.name` 守卫，项目侧内容处理路径已覆盖。SDK 内部工具执行路径（`@mariozechner/pi-coding-agent`）不受项目侧过滤影响。
+- **Bug 2（DSML 误解析）**：项目源码中不存在 `<invoke>`/DSML 解析逻辑，该解析在 Pi SDK 内部。无法从项目侧修复。
+
+---
+
 ## 已修复（已收入 CHANGE_LOG.md）
 
 | # | 标题 |
@@ -98,6 +118,9 @@
 | `lib/bridge/media-delivery-service.js` | `_sendSessionFile` buffer 失败 fallthrough 到 public_url |
 | `lib/bridge/wechat-adapter.js` | `sendMediaBuffer` 中文报错简化 |
 | `lib/bridge/feishu-adapter.js` | `sendMediaBuffer` image_key/file_key null 检查 |
+| `core/llm-client.js` | `<think>`/`<thinking>` 正则增强，支持未闭合标签 |
+| `lib/memory/compiled-memory-state.js` | `normalizeCompiledSectionBody` 添加 think 标签剥离 |
+| `lib/memory/session-summary.js` | `rollingSummary` 输出后剥离 think 标签 |
 | `BUG_FIXES.md` | 实时跟踪文档 |
 
 *本文件由修复任务实时更新。*
