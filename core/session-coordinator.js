@@ -220,6 +220,7 @@ export class SessionCoordinator {
     this._pendingPermissionMode = null;
     this._runtimePermissionModeDefault = DEFAULT_SESSION_PERMISSION_MODE;
     this._metaWriteQueue = Promise.resolve();
+    this._switchQueue = Promise.resolve();
   }
 
   static _TITLES_TTL = 60_000; // 60 秒
@@ -286,17 +287,9 @@ export class SessionCoordinator {
     const sessionPathForMeta = sessionMgr.getSessionFile?.() || null;
     let restoredThinkingLevel = null;
     if (restore && sessionPathForMeta) {
-      try {
-        const metaPath = path.join(agent.sessionDir, "session-meta.json");
-        const meta = await this._readMetaCached(metaPath);
-        const metaEntry = meta[path.basename(sessionPathForMeta)];
-        if (typeof metaEntry?.thinkingLevel === "string") {
-          restoredThinkingLevel = metaEntry.thinkingLevel;
-        }
-      } catch (err) {
-        if (err.code !== "ENOENT") {
-          log.warn(`session thinking level restore failed: ${err.message}`);
-        }
+      const metaEntry = await this._getSessionMetaEntry(agent, sessionPathForMeta);
+      if (typeof metaEntry?.thinkingLevel === "string") {
+        restoredThinkingLevel = metaEntry.thinkingLevel;
       }
     }
     const restoredPromptSnapshot = restore && sessionPathForMeta
@@ -345,15 +338,8 @@ export class SessionCoordinator {
       : (agent.memoryMasterEnabled !== false && !!memoryEnabled);
     let restoredExperienceEnabled = false;
     if (restore && sessionPathForMeta) {
-      try {
-        const metaPath = path.join(agent.sessionDir, "session-meta.json");
-        const meta = await this._readMetaCached(metaPath);
-        restoredExperienceEnabled = meta[path.basename(sessionPathForMeta)]?.experienceEnabled === true;
-      } catch (err) {
-        if (err.code !== "ENOENT") {
-          log.warn(`session-meta.json 读取 experienceEnabled 失败: ${err.message}`);
-        }
-      }
+      const metaEntry = await this._getSessionMetaEntry(agent, sessionPathForMeta);
+      restoredExperienceEnabled = metaEntry?.experienceEnabled === true;
     }
     const agentHasExperienceSwitch = typeof agent.experienceEnabled === "boolean";
     const frozenExperienceEnabled = restore
@@ -760,6 +746,13 @@ export class SessionCoordinator {
   }
 
   async switchSession(sessionPath) {
+    // 排队执行，防止并发 switch 导致状态不一致
+    const next = () => this._doSwitchSession(sessionPath);
+    this._switchQueue = this._switchQueue.then(next, next);
+    return this._switchQueue;
+  }
+
+  async _doSwitchSession(sessionPath) {
     // 只接受"对话焦点"路径，拒绝 subagent-sessions/、activity/、.ephemeral/ 等旁路
     // 目录下的 session 文件。一旦这类路径混入焦点指针，listSessions 的占位逻辑会把
     // 它伪造成"新对话"幻影条目（不能归档、重启即消失）。
@@ -777,18 +770,8 @@ export class SessionCoordinator {
     }
 
     // 从 session-meta.json 恢复记忆开关（model 由 PI SDK 从 JSONL 恢复，不在此处读取）
-    let memoryEnabled = true;
-    try {
-      const metaPath = path.join(this._d.getAgent().sessionDir, "session-meta.json");
-      const meta = await this._readMetaCached(metaPath);
-      const sessKey = path.basename(sessionPath);
-      const metaEntry = meta[sessKey];
-      if (metaEntry?.memoryEnabled === false) memoryEnabled = false;
-    } catch (err) {
-      if (err.code !== "ENOENT") {
-        log.warn(`session-meta.json 读取失败: ${err.message}`);
-      }
-    }
+    const metaEntry = await this._getSessionMetaEntry(this._d.getAgent(), sessionPath);
+    const memoryEnabled = metaEntry?.memoryEnabled !== false;
 
     // 如果已在 map 中，切指针
     const existing = this._sessions.get(sessionPath);
@@ -858,6 +841,20 @@ export class SessionCoordinator {
     } catch (err) {
       // 健康度检查不能阻塞 restore，吃掉所有错误
       log.warn(`session health check failed for ${path.basename(sessionPath)}: ${err.message}`);
+    }
+  }
+
+  /**
+   * 从 session-meta.json 读取指定 session 的元信息条目。
+   * 文件不存在或读取失败返回 null，不抛错。
+   */
+  async _getSessionMetaEntry(agent, sessionPath) {
+    try {
+      const metaPath = path.join(agent.sessionDir, "session-meta.json");
+      const meta = await this._readMetaCached(metaPath);
+      return meta[path.basename(sessionPath)] || null;
+    } catch {
+      return null;
     }
   }
 

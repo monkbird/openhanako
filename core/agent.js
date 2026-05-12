@@ -196,8 +196,8 @@ export class Agent {
         fs.writeFileSync(migrationDone, new Date().toISOString());
       } catch (err) {
         console.error(`[agent] v1→v2 迁移失败（不影响启动）: ${err.message}`);
-        // 迁移失败也写标记，避免每次启动重试
-        try { fs.writeFileSync(migrationDone, `failed: ${err.message}`); } catch {}
+        if (err.stack) console.error(err.stack);
+        // 不写迁移标记：下次启动会重试迁移
       }
     }
 
@@ -224,12 +224,24 @@ export class Agent {
 
     // 启动时试探性 resolve 一次，只为打一条启动告警（运行时由 ticker 各调用点的 try/catch 处理）
     if (this._memoryModel && this._resolveModel) {
-      try {
-        this._resolveModel(this._memoryModel, this._config);
-      } catch (err) {
+      let lastErr = null;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          this._resolveModel(this._memoryModel, this._config);
+          lastErr = null;
+          break;
+        } catch (err) {
+          lastErr = err;
+          if (attempt === 0) {
+            // 第一次失败：等 2 秒重试（可能是临时网络抖动）
+            await new Promise(r => setTimeout(r, 2000));
+          }
+        }
+      }
+      if (lastErr) {
         const src = userSetUtilityLarge ? "utility_large" : "聊天模型 fallback";
-        console.warn(`[memory] ${src} 解析失败，记忆系统暂不可用（改完凭证后 tick 会自动恢复） — ${err.message}`);
-        this._cb?.emitDevLog?.(`记忆系统暂不可用：${src} 解析失败 — ${err.message}`, "warn");
+        console.warn(`[memory] ${src} 解析失败，记忆系统暂不可用（改完凭证后 tick 会自动恢复） — ${lastErr.message}`);
+        this._cb?.emitDevLog?.(`记忆系统暂不可用：${src} 解析失败 — ${lastErr.message}`, "warn");
       }
     } else if (!this._memoryModel) {
       console.warn("[memory] 记忆系统未启动：utility_large 未配置且无聊天模型可 fallback");
@@ -238,40 +250,7 @@ export class Agent {
 
     if (this._memoryModel && this._resolveModel) {
       log(`  [agent] 4. memoryTicker...`);
-      this._memoryTicker = createMemoryTicker({
-        summaryManager: this._summaryManager,
-        configPath: this.configPath,
-        factStore: this._factStore,
-        // 现场 resolve：每次 tick 拿到 yaml 最新凭证
-        getResolvedMemoryModel: () => this._resolveModel(this._memoryModel, this._config),
-        getMemoryMasterEnabled: () => this._memoryMasterEnabled,
-        isSessionMemoryEnabled: (sessionPath) => this.isSessionMemoryEnabledFor(sessionPath),
-        onCompiled: () => {
-          // _systemPrompt 是非 session 路径（巡检/cron/频道/DM/bridge owner 新建）
-          // 共享的 cache，必须按 master 构建，不被 per-session 开关污染。
-          this._systemPrompt = this.buildSystemPrompt({ forceMemoryEnabled: this._memoryMasterEnabled });
-          console.log(`[${this.agentName}] 记忆编译完成，system prompt 已刷新`);
-        },
-        sessionDir: this.sessionDir,
-        memoryDir: path.dirname(this.memoryMdPath),
-        memoryMdPath: this.memoryMdPath,
-        todayMdPath: this.todayMdPath,
-        weekMdPath: this.weekMdPath,
-        longtermMdPath: this.longtermMdPath,
-        factsMdPath: this.factsMdPath,
-      });
-      log(`  [agent] 4. memoryTicker 创建完成`);
-
-      // 5. 后台跑首次 tick（不阻塞启动，memory.md 已有上次编译结果）
-      log(`  [agent] 5. 后台 tick...`);
-      this._memoryTicker.tick().then(() => {
-        log(`✿ 记忆整理完成`);
-      }).catch((err) => {
-        console.error(`[记忆] 启动 tick 出错：${err.message}`);
-      });
-
-      // 6. 启动定时调度
-      this._memoryTicker.start();
+      this._initMemoryTicker();
     } else {
       console.warn(`[agent] ⚠ 未配置 utility 模型，记忆系统暂不可用（用户可在设置中配置后重启）`);
     }
@@ -463,6 +442,53 @@ export class Agent {
   }
 
   /**
+   * 创建并启动记忆 ticker。可安全重复调用（先 stop 旧 ticker 再创建新）。
+   * 前提：this._memoryModel && this._resolveModel 均已就绪。
+   */
+  _initMemoryTicker() {
+    if (!this._memoryModel || !this._resolveModel) return;
+
+    // 如果已有 ticker，先停止再创建（热更新场景）
+    if (this._memoryTicker) {
+      this._memoryTicker.stop().catch(() => {});
+      this._memoryTicker = null;
+    }
+
+    this._memoryTicker = createMemoryTicker({
+      summaryManager: this._summaryManager,
+      configPath: this.configPath,
+      factStore: this._factStore,
+      // 现场 resolve：每次 tick 拿到 yaml 最新凭证
+      getResolvedMemoryModel: () => this._resolveModel(this._memoryModel, this._config),
+      getMemoryMasterEnabled: () => this._memoryMasterEnabled,
+      isSessionMemoryEnabled: (sessionPath) => this.isSessionMemoryEnabledFor(sessionPath),
+      onCompiled: () => {
+        // _systemPrompt 是非 session 路径（巡检/cron/频道/DM/bridge owner 新建）
+        // 共享的 cache，必须按 master 构建，不被 per-session 开关污染。
+        this._systemPrompt = this.buildSystemPrompt({ forceMemoryEnabled: this._memoryMasterEnabled });
+        console.log(`[${this.agentName}] 记忆编译完成，system prompt 已刷新`);
+      },
+      sessionDir: this.sessionDir,
+      memoryDir: path.dirname(this.memoryMdPath),
+      memoryMdPath: this.memoryMdPath,
+      todayMdPath: this.todayMdPath,
+      weekMdPath: this.weekMdPath,
+      longtermMdPath: this.longtermMdPath,
+      factsMdPath: this.factsMdPath,
+    });
+
+    // 后台跑首次 tick（不阻塞启动）
+    this._memoryTicker.tick().then(() => {
+      log(`✿ 记忆整理完成`);
+    }).catch((err) => {
+      console.error(`[记忆] 启动 tick 出错：${err.message}`);
+    });
+
+    // 启动定时调度
+    this._memoryTicker.start();
+  }
+
+  /**
    * 优雅关闭：停止记忆调度，等待 tick 完成后关闭 DB
    */
   async dispose() {
@@ -505,7 +531,14 @@ export class Agent {
   setDmSentHandler(fn) { this._dmSentHandler = fn; }
   setChannelPostHandler(fn) { this._channelPostHandler = fn; }
   setUtilityModel(val) { this._utilityModel = val; }
-  setMemoryModel(val) { this._memoryModel = val; }
+  setMemoryModel(val) {
+    const wasNull = !this._memoryModel;
+    this._memoryModel = val;
+    // 从 null→非 null 时创建记忆 ticker（启动时模型未配置，用户后续配好了热更新）
+    if (wasNull && val && this._resolveModel) {
+      this._initMemoryTicker();
+    }
+  }
 
   // ════════════════════════════
   //  状态访问

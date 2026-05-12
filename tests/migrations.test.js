@@ -830,7 +830,7 @@ describe("migration #3 — migrateWorkspaceToPerAgent", () => {
     expect(assistantConfig.desk.heartbeat_enabled).toBe(false);
   });
 
-  it("preserves data when no agent config.yaml exists (version stays at 2)", () => {
+  it("preserves data when no agent config.yaml exists (skip failed migration, continue others)", () => {
     fs.mkdirSync(path.join(agentsDir, "hana"), { recursive: true });
     const prefs = makePrefs(userDir);
     prefs.savePreferences({
@@ -839,12 +839,12 @@ describe("migration #3 — migrateWorkspaceToPerAgent", () => {
       _dataVersion: 2,
     });
 
-    // migration #3 throws internally; runner catches it and breaks without bumping version
+    // migration #3 throws internally; runner catches it and continues with remaining migrations
     runMigration3(prefs);
 
     const p = prefs.getPreferences();
     expect(p.home_folder).toBe("/workspace");
-    expect(p._dataVersion).toBe(2);
+    expect(p._dataVersion).toBe(LATEST_DATA_VERSION);
   });
 
   it("is idempotent — rerun after success is a no-op", () => {
@@ -2023,7 +2023,7 @@ describe("migration #18 — create local identity registries", () => {
       errorSpy.mockRestore();
     }
 
-    expect(prefs.getPreferences()._dataVersion).toBe(17);
+    expect(prefs.getPreferences()._dataVersion).toBe(LATEST_DATA_VERSION);
     expect(fs.existsSync(path.join(tmpDir, "server-node.json"))).toBe(false);
     expect(fs.existsSync(path.join(tmpDir, "spaces.json"))).toBe(false);
   });

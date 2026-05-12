@@ -9,6 +9,48 @@ import path from "path";
 import { callText } from "./llm-client.js";
 import { getLocale } from "../server/i18n.js";
 
+/**
+ * 判断 LLM 错误是否为可重试的临时性错误。
+ * 超时/abort 不重试（调用方有意为之）、认证错误不重试。
+ */
+function _isRetryableError(err) {
+  if (!err) return false;
+  // 超时/abort 不重试
+  if (err.name === "AbortError" || err.name === "TimeoutError" || err.code === "LLM_TIMEOUT") return false;
+  // 认证错误不重试
+  const status = err.status || err.statusCode || 0;
+  if (status === 401 || status === 403) return false;
+  // 5xx/429 重试
+  if (status === 429 || (status >= 500 && status < 600)) return true;
+  // 网络错误
+  const msg = (err.message || "").toLowerCase();
+  if (msg.includes("econnrefused") || msg.includes("econnreset") || msg.includes("etimedout")
+    || msg.includes("socket hang up") || msg.includes("network") || msg.includes("fetch failed")) return true;
+  return false;
+}
+
+/**
+ * 带重试的内部辅助：临时性错误自动重试最多 3 次，指数退避。
+ */
+async function _withRetry(fn, opts) {
+  const MAX_ATTEMPTS = 3;
+  const BASE_DELAY_MS = 1000;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      return await fn(opts);
+    } catch (err) {
+      const isLast = attempt === MAX_ATTEMPTS;
+      if (!_isRetryableError(err) || isLast) throw err;
+      const delay = BASE_DELAY_MS * Math.pow(2, attempt - 1);
+      console.warn(`[llm-utils] LLM 调用失败，${delay}ms 后重试 (${attempt}/${MAX_ATTEMPTS}): ${err.message}`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+}
+
+const callLlmWithRetry = (opts) => _withRetry(callLlm, opts);
+const callTextWithRetry = (opts) => _withRetry(callText, opts);
+
 /** Pi SDK content block 是否为工具调用（兼容 tool_use / toolCall 两种格式） */
 export const isToolCallBlock = (b) => (b.type === "tool_use" || b.type === "toolCall") && !!b.name;
 
@@ -134,7 +176,7 @@ Rules:
     const userLabel = isZh ? "用户" : "User";
     const assistantLabel = isZh ? "助手" : "Assistant";
 
-    return await callLlm({
+    return await callLlmWithRetry({
       model, api, api_key, base_url,
       messages: [
         { role: "system", content: systemContent },
@@ -166,7 +208,7 @@ export async function translateSkillNames(utilConfig, names, lang) {
     const { utility: model, api_key, base_url, api } = utilConfig;
     if (!api_key || !base_url || !api) return {};
     const isZh = getLocale().startsWith("zh");
-    const text = await callLlm({
+    const text = await callLlmWithRetry({
       model, api, api_key, base_url,
       messages: [
         {
@@ -244,7 +286,7 @@ Rules:
     const contextLabel = isZh ? "巡检上下文" : "Patrol context";
     const replyLabel = isZh ? "Agent 回复" : "Agent reply";
 
-    const text = await callText({
+    const text = await callTextWithRetry({
       api, model,
       apiKey: api_key,
       baseUrl: base_url,
@@ -291,7 +333,7 @@ export async function summarizeActivityQuick(utilConfig, sessionPath) {
     const contextLabel = isZh ? "巡检上下文" : "Patrol context";
     const replyLabel = isZh ? "Agent 回复" : "Agent reply";
 
-    return await callText({
+    return await callTextWithRetry({
       api, model,
       apiKey: api_key,
       baseUrl: base_url,
@@ -361,7 +403,7 @@ export async function generateAgentId(utilConfig, name, agentsDir) {
   try {
     const isZh = getLocale().startsWith("zh");
     const { utility: model, api_key, base_url, api } = utilConfig;
-    const text = await callLlm({
+    const text = await callLlmWithRetry({
       model, api, api_key, base_url,
       messages: [
         {
@@ -437,7 +479,7 @@ export async function generateDescription(utilConfig, personality, locale) {
       ? "根据以下 AI agent 的人格设定，写一段 100 字以内的能力描述。要求：涵盖人格特征、专长领域、沟通风格、适合的任务类型。纯文本，不要用 markdown 格式。直接输出描述，不要解释。"
       : "Based on the following AI agent persona, write a capability description in under 100 characters. Cover: personality traits, expertise, communication style, suitable tasks. Plain text, no markdown. Output the description directly, no explanation.";
 
-    const raw = await callLlm({
+    const raw = await callLlmWithRetry({
       model, api, api_key, base_url,
       messages: [
         { role: "system", content: systemContent },

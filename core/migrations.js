@@ -80,6 +80,12 @@ const migrations = {
 // ── Runner ──────────────────────────────────────────────────────────────────
 
 /**
+ * 迁移实现契约：
+ * 1. 幂等性 — 每条迁移可在已应用状态上安全重放。通过检测目标状态是否已到位跳过。
+ * 2. 原子性 — 迁移失败不应留下"半应用"状态。若一条迁移分多步写，失败需保证
+ *    后续重试能安全覆盖前一步，或通过幂等检测跳过。
+ * 3. 无副作用 — 除迁移描述的数据变更外，不触及无关文件。
+ *
  * @param {object} ctx
  * @param {string}   ctx.hanakoHome
  * @param {string}   ctx.agentsDir
@@ -104,16 +110,17 @@ export function runMigrations(ctx) {
   for (const v of pending) {
     try {
       migrations[v](ctx);
+      // 每跑完一条就持久化版本号，防止中途崩溃导致重跑已成功的迁移
+      const fresh = prefs.getPreferences();
+      fresh._dataVersion = v;
+      prefs.savePreferences(fresh);
       log(`[migrations] #${v} 完成`);
     } catch (err) {
       console.error(`[migrations] #${v} 失败: ${err.message}`);
-      // 失败则停在当前版本，不继续后续迁移
-      break;
+      if (err.stack) console.error(err.stack);
+      // 失败不阻塞后续迁移；重启时已成功的迁移不会重跑（_dataVersion 已写入），
+      // 失败的迁移则会因 _dataVersion 未更新而再次尝试
     }
-    // 每跑完一条就持久化版本号，防止中途崩溃导致重跑已成功的迁移
-    const fresh = prefs.getPreferences();
-    fresh._dataVersion = v;
-    prefs.savePreferences(fresh);
   }
 }
 

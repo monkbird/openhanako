@@ -118,11 +118,13 @@ export class AgentManager {
         ag.setGetOwnerIds(this._makeOwnerIdsFn(ag));
         try {
           ag.loadConfigOnly();
+          this._registerAgent(this._activeAgentId, ag);
         } catch (cfgErr) {
-          console.error(`[agent-manager] fallback loadConfigOnly 也失败: ${cfgErr.message}`);
+          console.error(`[agent-manager] 焦点 agent "${this._activeAgentId}" 初始化彻底失败：config.yaml 不可读`);
           if (cfgErr.stack) console.error(cfgErr.stack);
+          // 不注册 agent——下游读 null config 会触发 NPE 级联
+          this._cb?.emitDevLog?.(`助手 "${this._activeAgentId}" 初始化失败：config.yaml 不可读`, "error");
         }
-        this._registerAgent(this._activeAgentId, ag);
       }
     }
 
@@ -133,6 +135,18 @@ export class AgentManager {
       for (let i = 0; i < results.length; i++) {
         if (results[i].status === "rejected") {
           console.error(`[agent-manager] agent "${others[i]}" init 失败: ${results[i].reason?.message}`);
+          // 注册骨架 agent，UI 可显示"配置错误"状态
+          if (!this._agents.has(others[i])) {
+            try {
+              const ag = this._createAgentInstance(others[i], () => ({}));
+              ag.setGetOwnerIds(this._makeOwnerIdsFn(ag));
+              ag.loadConfigOnly();
+              ag._initError = results[i].reason?.message || "unknown";
+              this._registerAgent(others[i], ag);
+            } catch (cfgErr) {
+              console.error(`[agent-manager] agent "${others[i]}" loadConfigOnly 也失败: ${cfgErr.message}`);
+            }
+          }
         }
       }
     }
@@ -486,6 +500,8 @@ export class AgentManager {
         models.defaultModel = model;
       } else if (chatRef) {
         log.warn(`switchAgent(${agentId}): models.chat 缺 provider (${JSON.stringify(chatRef)})，跳过默认模型设置`);
+        models.defaultModel = null;
+        this._d.getEngine?.()?.emitDevLog?.(`助手 "${this.agent.agentName}" 模型配置不完整：models.chat 缺 provider`, "warn");
       }
       const effectiveModel = ref?.id || models.defaultModel?.id || "inherited";
       log.log(`agent switched to ${this.agent.agentName} (${agentId}), model=${effectiveModel}`);
@@ -554,6 +570,7 @@ export class AgentManager {
       await this._d.getChannelManager().cleanupAgentFromChannels(agentId);
     } catch (err) {
       log.error(`频道清理失败 (${agentId}): ${err.message}`);
+      throw new Error(`删除助手失败：频道清理未完成 — ${err.message}`);
     }
 
     await fsp.rm(agentDir, { recursive: true, force: true });

@@ -145,21 +145,29 @@ export class BridgeSessionManager {
   async abortSession(sessionKey) {
     const session = this._activeSessions.get(sessionKey);
     if (!session?.isStreaming) return false;
+
+    // 先删除，确保调用方能立即感知 session 已释放
     this._activeSessions.delete(sessionKey);
+
+    let cleanupOk = true;
     try {
       const abortPromise = session.abort?.();
-      Promise.resolve(abortPromise).catch((err) =>
-        console.warn(`[bridge-session] abortSession[${sessionKey}]: abort failed: ${err.message}`),
-      );
+      await Promise.resolve(abortPromise).catch((err) => {
+        console.warn(`[bridge-session] abortSession[${sessionKey}]: abort failed: ${err.message}`);
+        cleanupOk = false;
+      });
     } catch (err) {
       console.warn(`[bridge-session] abortSession[${sessionKey}]: abort failed: ${err.message}`);
+      cleanupOk = false;
     }
     try {
-      session.dispose?.();
+      await session.dispose?.();
     } catch (err) {
       console.warn(`[bridge-session] abortSession[${sessionKey}]: session.dispose failed: ${err.message}`);
+      cleanupOk = false;
     }
-    return true;
+
+    return cleanupOk;
   }
 
   /** bridge 索引文件路径 */
@@ -195,26 +203,30 @@ export class BridgeSessionManager {
     let totalCleaned = 0;
 
     for (const agent of this._listAgentsForReconcile()) {
-      const index = this.readIndex(agent);
-      const bridgeDir = path.join(agent.sessionDir, "bridge");
-      let cleaned = 0;
+      try {
+        const index = this.readIndex(agent);
+        const bridgeDir = path.join(agent.sessionDir, "bridge");
+        let cleaned = 0;
 
-      for (const [sessionKey, raw] of Object.entries(index)) {
-        const entry = typeof raw === "string" ? { file: raw } : raw;
-        if (!entry.file) continue;
-        const fp = path.join(bridgeDir, entry.file);
-        if (!fs.existsSync(fp)) {
-          // 保留元数据（name/avatarUrl/userId），只删 file 引用
-          delete entry.file;
-          index[sessionKey] = entry;
-          cleaned++;
+        for (const [sessionKey, raw] of Object.entries(index)) {
+          const entry = typeof raw === "string" ? { file: raw } : raw;
+          if (!entry.file) continue;
+          const fp = path.join(bridgeDir, entry.file);
+          if (!fs.existsSync(fp)) {
+            // 保留元数据（name/avatarUrl/userId），只删 file 引用
+            delete entry.file;
+            index[sessionKey] = entry;
+            cleaned++;
+          }
         }
-      }
 
-      if (cleaned > 0) {
-        this.writeIndex(index, agent);
-        totalCleaned += cleaned;
-        debugLog()?.log("bridge", `reconcile: cleaned ${cleaned} orphan session refs for ${agent.id || "unknown"}`);
+        if (cleaned > 0) {
+          this.writeIndex(index, agent);
+          totalCleaned += cleaned;
+          debugLog()?.log("bridge", `reconcile: cleaned ${cleaned} orphan session refs for ${agent.id || "unknown"}`);
+        }
+      } catch (err) {
+        console.warn(`[bridge-session] reconcile 处理 agent "${agent.id || 'unknown'}" 时失败: ${err.message}`);
       }
     }
 
@@ -498,8 +510,8 @@ export class BridgeSessionManager {
    * @returns {boolean}
    */
   injectMessage(sessionKey, text, opts = {}) {
-    const agent = this._resolveAgent(opts, "injectMessage");
     try {
+      const agent = this._resolveAgent(opts, "injectMessage");
       const index = this.readIndex(agent);
       const raw = index[sessionKey];
       const existingFile = typeof raw === "string" ? raw : raw?.file || null;
@@ -511,18 +523,23 @@ export class BridgeSessionManager {
       const bridgeDir = path.join(agent.sessionDir, "bridge");
       const sessionPath = path.join(bridgeDir, existingFile);
       if (!fs.existsSync(sessionPath)) {
-        console.warn(`[bridge-session] injectMessage: session 文件不存在: ${sessionPath}`);
+        console.warn(`[bridge-session] injectMessage: session 文件不存在: ${sessionPath}，清理索引`);
+        delete index[sessionKey];
+        this.writeIndex(index, agent);
         return false;
       }
 
       const mgr = SessionManager.open(sessionPath, path.dirname(sessionPath));
-      mgr.appendMessage({
-        role: "assistant",
-        content: [{ type: "text", text }],
-      });
-
-      debugLog()?.log("bridge-session", `injected message to ${sessionKey} (${text.length} chars)`);
-      return true;
+      try {
+        mgr.appendMessage({
+          role: "assistant",
+          content: [{ type: "text", text }],
+        });
+        debugLog()?.log("bridge-session", `injected message to ${sessionKey} (${text.length} chars)`);
+        return true;
+      } finally {
+        mgr.dispose?.();
+      }
     } catch (err) {
       console.error(`[bridge-session] injectMessage failed: ${err.message}`);
       return false;
@@ -699,6 +716,18 @@ export class BridgeSessionManager {
   /** 创建 bridge 专用 settings：compaction 由 SDK 默认触发（contextWindow - 16384） */
   _createSettings(model) {
     return createDefaultSettings();
+  }
+
+  /** 优雅关闭：中止所有活跃 bridge session */
+  async dispose() {
+    const keys = [...this._activeSessions.keys()];
+    const results = await Promise.allSettled(keys.map(key => this.abortSession(key)));
+    for (let i = 0; i < results.length; i++) {
+      if (results[i].status === "rejected") {
+        console.warn(`[bridge-session] dispose: abort ${keys[i]} 失败: ${results[i].reason?.message}`);
+      }
+    }
+    this._activeSessions.clear();
   }
 }
 

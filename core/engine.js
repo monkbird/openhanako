@@ -997,7 +997,12 @@ export class HanaEngine {
 
     // 4. 模型发现
     log(`[init] 4/5 发现可用模型...`);
-    try { await this.syncModelsAndRefresh(); } catch {}
+    try {
+      await this.syncModelsAndRefresh();
+    } catch (err) {
+      console.warn(`[engine] syncModelsAndRefresh 失败（将在后续模型发现步骤中处理）: ${err.message}`);
+      if (err.stack) console.error(err.stack);
+    }
     await this._models.refreshAvailable();
     this._configCoord.normalizeUtilityApiPreferences(log);
     const availableModels = this._models.availableModels;

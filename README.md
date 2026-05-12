@@ -158,3 +158,4 @@ npm run typecheck
 - [安全政策](SECURITY.md)
 - [插件开发指南](PLUGINS.md)
 - [贡献指南](CONTRIBUTING.md)
+- [更新日志](CHANGE_LOG.md)
