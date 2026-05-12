@@ -207,6 +207,7 @@ export function createProvidersRoute(engine) {
         name: m.display_name || m.id,
         context: m.max_input_tokens ?? null,
         maxOutput: m.max_tokens ?? null,
+        image: m.image === true ? true : undefined,
       }));
     }
 
@@ -218,6 +219,7 @@ export function createProvidersRoute(engine) {
           name: m.displayName || id,
           context: m.inputTokenLimit ?? null,
           maxOutput: m.outputTokenLimit ?? null,
+          image: m.image === true ? true : undefined,
         };
       }).filter(m => m.id);
     }
@@ -227,6 +229,7 @@ export function createProvidersRoute(engine) {
       name: m.id,
       context: m.context_length || m.context_window || m.max_context_length || null,
       maxOutput: m.max_completion_tokens || m.max_output_tokens || null,
+      image: m.image === true ? true : undefined,
     }));
   }
 
@@ -273,6 +276,45 @@ export function createProvidersRoute(engine) {
     }
 
     return { error: `No models found for provider "${name}"`, models: [] };
+  }
+
+  /** Ollama 原生 API 不返回 capabilities，通过模型名启发式 + /api/tags 检测视觉模型 */
+  async function _enrichOllamaVision(models, baseUrl) {
+    if (!models?.length) return models;
+    const visionPatterns = [/^gemma-[34]/i, /\bllava\b/i, /\bbakllava\b/i, /\bvision\b/i, /\bmultimodal\b/i, /[_-]vl[_-]/i, /\bcogvlm\b/i, /\bflorence\b/i, /\bidefics\b/i, /\bfuyu\b/i, /\bminicpm[_-]v\b/i, /\binternvl\b/i, /\bqwen2[_-]vl\b/i, /\bdeepseek[_-]vl\b/i, /\byi[_-]vl\b/i];
+
+    // 先走 pattern 匹配（同步，零开销）
+    for (const model of models) {
+      const mid = (model.id || "").toLowerCase();
+      if (visionPatterns.some(p => p.test(mid))) {
+        model.image = true;
+      }
+    }
+
+    // 再尝试 Ollama 原生 /api/tags 补充检测（静默失败不阻塞）
+    try {
+      const base = baseUrl.replace(/\/+$/, "").replace(/\/v1\/?$/, "");
+      const tagsRes = await fetch(`${base}/api/tags`, { signal: AbortSignal.timeout(3000) });
+      if (tagsRes.ok) {
+        const tagsData = await tagsRes.json();
+        const tagsByName = new Map();
+        for (const m of tagsData.models || []) {
+          const name = (m.name || "").split(":")[0].toLowerCase();
+          const families = m.details?.families || [];
+          tagsByName.set(name, { families });
+        }
+        for (const model of models) {
+          if (model.image) continue; // 前面 pattern 已判定为视觉
+          const mid = (model.id || "").toLowerCase();
+          const tag = tagsByName.get(mid);
+          if (tag?.families?.some(f => /clip|vision|mmproj/i.test(f))) {
+            model.image = true;
+          }
+        }
+      }
+    } catch { /* 静默 */ }
+
+    return models;
   }
 
   /**
@@ -324,7 +366,13 @@ export function createProvidersRoute(engine) {
 
         if (res.ok) {
           const data = await res.json();
-          const remoteModels = normalizeRemoteModels(data, effectiveApi);
+          let remoteModels = normalizeRemoteModels(data, effectiveApi);
+
+          // Ollama：远程 API 不返回 capabilities，通过模型名启发式 + /api/tags 检测视觉模型
+          if (name === "ollama") {
+            remoteModels = await _enrichOllamaVision(remoteModels, effectiveBaseUrl);
+          }
+
           const { models, ignoredModels } = filterDiscoveredProviderModels(name, remoteModels, {
             baseUrl: effectiveBaseUrl,
           });

@@ -262,8 +262,11 @@ export async function callText({
       : "";
   }
 
-  // 清理 <think> 标签（部分 provider 用标签而非 content block 包裹思考内容）
-  text = text.replace(/<think>[\s\S]*?<\/think>\s*/g, "").trim();
+  // 清理 <think>/<thinking> 标签（部分 provider 用标签而非 content block 包裹思考内容）
+  text = text
+    .replace(/<think(?:ing)?>[\s\S]*?(?:<\/think(?:ing)?>|$)\s*/gi, "")
+    .replace(/<\/think(?:ing)?>\s*/gi, "")
+    .trim();
 
   if (!text) {
     if (combinedSignal.aborted) {
