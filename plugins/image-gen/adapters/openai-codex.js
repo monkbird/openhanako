@@ -1,6 +1,7 @@
 // plugins/image-gen/adapters/openai-codex.js
 import fs from "fs";
 import path from "path";
+import { execFile } from "child_process";
 import { saveImage } from "../lib/download.js";
 
 const PROVIDER_ID = "openai-codex-oauth";
@@ -97,6 +98,32 @@ function resolveResponsesModel(params, providerDefaults) {
   return DEFAULT_RESPONSES_MODEL;
 }
 
+/**
+ * 用 curl 替代 Node.js fetch() 发送 POST 请求
+ * 绕过 Cloudflare 对 Node.js TLS 指纹 (JA3) 的拦截
+ */
+function curlPost(url, body, headers) {
+  return new Promise((resolve, reject) => {
+    const args = ["-s", "-w", "\n%{http_code}", "-X", "POST"];
+    for (const [k, v] of Object.entries(headers)) {
+      args.push("-H", `${k}: ${v}`);
+    }
+    args.push("-d", body);
+    args.push(url);
+
+    execFile("curl", args, { encoding: "utf8", maxBuffer: 50 * 1024 * 1024 }, (err, stdout) => {
+      if (err) {
+        reject(new Error(`curl exec error: ${err.message}`));
+        return;
+      }
+      const lines = stdout.trim().split("\n");
+      const statusCode = parseInt(lines[lines.length - 1], 10);
+      const responseBody = lines.slice(0, -1).join("\n");
+      resolve({ status: statusCode, body: responseBody });
+    });
+  });
+}
+
 async function getCredentials(ctx) {
   const creds = await ctx.bus.request("provider:credentials", { providerId: PROVIDER_ID });
   if (creds.error || !creds.apiKey) {
@@ -158,38 +185,54 @@ export const openaiCodexImageAdapter = {
     const body = {
       model: resolveResponsesModel(params, providerDefaults),
       store: false,
-      stream: false,
-      instructions: "Generate or edit the requested image and return the image result.",
+      stream: true,
+      instructions: "Generate the requested image and return it as base64 in the image_generation_call result.",
       input: [{ role: "user", content }],
       tools: [tool],
-      tool_choice: "auto",
+      tool_choice: { type: "image_generation" },
       parallel_tool_calls: false,
     };
 
-    const res = await fetch(resolveCodexResponsesUrl(creds.baseUrl), {
-      method: "POST",
-      headers: {
+    const result = await curlPost(
+      resolveCodexResponsesUrl(creds.baseUrl),
+      JSON.stringify(body),
+      {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${creds.apiKey}`,
+        Authorization: `Bearer ${creds.apiKey}`,
         "chatgpt-account-id": creds.accountId,
         "OpenAI-Beta": "responses=experimental",
-        "originator": "pi",
+        originator: "pi",
       },
-      body: JSON.stringify(body),
-    });
+    );
 
-    if (!res.ok) {
-      let msg = `API error ${res.status}`;
+    if (result.status >= 400) {
+      let msg = `API error ${result.status}`;
       try {
-        const err = await res.json();
+        const err = JSON.parse(result.body);
         if (err.error?.message) msg = `${msg}: ${err.error.message}`;
         else if (err.detail) msg = `${msg}: ${err.detail}`;
       } catch {}
       throw new Error(msg);
     }
 
-    const data = await res.json();
-    const images = collectImageResults(data);
+    // Parse SSE stream — image data in response.output_item.done → image_generation_call.result
+    const sseLines = result.body.split(/\r?\n/);
+    const images = [];
+    for (const line of sseLines) {
+      if (!line.startsWith("data: ")) continue;
+      const payload = line.slice(6);
+      if (payload === "[DONE]") continue;
+      try {
+        const parsed = JSON.parse(payload);
+        if (parsed.type === "response.output_item.done" && parsed.item?.type === "image_generation_call") {
+          if (typeof parsed.item.result === "string" && parsed.item.result.length > 0) {
+            images.push(parsed.item.result);
+          }
+        }
+      } catch {
+        // skip unparseable SSE lines
+      }
+    }
     if (images.length === 0) {
       throw new Error("API returned no images");
     }
