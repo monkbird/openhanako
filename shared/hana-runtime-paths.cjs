@@ -33,10 +33,41 @@ function resolveHanaPiProjectDir(hanakoHome) {
   return path.join(resolveHanaPiRoot(hanakoHome), "project");
 }
 
+/**
+ * 检测本地代理设置
+ * 优先级：环境变量 > Clash for Windows 默认配置
+ */
+function detectProxyEnv() {
+  const proxyVars = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"];
+  for (const v of proxyVars) {
+    if (process.env[v]) return { name: v, value: process.env[v] };
+  }
+  // 检测 Clash for Windows 配置中的 mixed-port
+  try {
+    const clashConfigPath = path.join(os.homedir(), ".config", "clash", "config.yaml");
+    if (fs.existsSync(clashConfigPath)) {
+      const content = fs.readFileSync(clashConfigPath, "utf8");
+      const match = content.match(/mixed-port:\s*(\d+)/);
+      if (match) {
+        const port = parseInt(match[1], 10);
+        return { name: "HTTPS_PROXY", value: `http://127.0.0.1:${port}` };
+      }
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
 function withHanaPiSdkEnv(env, hanakoHome) {
+  const detected = detectProxyEnv();
+  const proxyEntry = detected ? { [detected.name]: detected.value } : {};
   return {
     ...env,
+    ...proxyEntry,
     [PI_SDK_AGENT_DIR_ENV]: resolveHanaPiAgentDir(hanakoHome),
+    // OAuth callback server 默认绑定 127.0.0.1（仅 IPv4），但 Windows 上
+    // localhost 优先解析为 IPv6 ::1，导致浏览器回调无法到达。显式指定
+    // localhost 让 Node.js 同时处理 IPv4 和 IPv6 连接。
+    PI_OAUTH_CALLBACK_HOST: "localhost",
   };
 }
 

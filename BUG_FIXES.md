@@ -40,8 +40,23 @@
 
 ### #737 — 无法接入 TG 机器人
 
-**状态**：🔍 待排查
-**分析**：可能是 Telegram 长轮询/webhook 配置问题，与 adapter 层关系较大。
+**状态**：✅ 已修复
+**文件**：`lib/bridge/telegram-adapter.js`
+**修复**：启动时 `deleteWebhook` 清理 + token 有效性校验。
+
+---
+
+## 批次四：OAuth 代理与登录
+
+### OpenAI Codex OAuth 登录失败（Token 交换 403）
+
+**状态**：✅ 已修复
+**文件**：`shared/hana-runtime-paths.cjs`, `node_modules/@mariozechner/pi-ai/dist/utils/oauth/openai-codex.js`
+**问题**：OAuth 浏览器回调成功获取 code 后，服务端 `fetch()` 请求 `auth.openai.com/oauth/token` 因国内 IP 被 OpenAI 拒绝（403 unsupported_country_region_territory）。
+**修复**：
+1. `withHanaPiSdkEnv()` 自动检测 Clash for Windows 代理配置，注入 `HTTPS_PROXY` 环境变量
+2. Pi SDK 的 token 交换 `fetch()` 使用 `undici.ProxyAgent` 经代理路由（非直连）
+3. 验证结果：不加代理 → 403；加代理 → 401（无效 code，预期行为）
 
 ### #670 — dm 工具只能发送无法接收/查看回复
 

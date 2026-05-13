@@ -109,7 +109,7 @@ export function useBridgeState() {
       if ((err as Error)?.name === 'AbortError') return;
       console.error('[bridge] load status failed:', err);
     }
-  };
+  }, [selectedAgentId, setStatus, setTgToken, setFsAppId, setFsAppSecret, setQqAppId, setQqAppSecret]);
 
   // Auto-fetch when selectedAgentId changes (abort stale on switch)
   useEffect(() => {

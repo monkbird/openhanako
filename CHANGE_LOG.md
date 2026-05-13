@@ -79,6 +79,23 @@
 
 ---
 
+---
+
+## 5/13 批次修复 — OpenAI Codex OAuth 代理支持
+
+| 文件 | 修复内容 |
+|------|---------|
+| `shared/hana-runtime-paths.cjs` | 自动检测 Clash for Windows 代理（读取 `config.yaml` 的 `mixed-port`），注入 `HTTPS_PROXY` 环境变量传递给 Pi SDK |
+| `node_modules/@mariozechner/pi-ai/dist/utils/oauth/openai-codex.js` | token 交换 `fetch()` 使用 `undici.ProxyAgent` 经代理路由，解决国内无法直连 OpenAI token 端点（403）的问题 |
+
+### 问题
+OpenAI Codex OAuth 浏览器回调成功后，token 交换请求从服务器 Node.js 直连 `auth.openai.com/oauth/token`，因国内 IP 被 OpenAI 拒绝（403 unsupported_country_region_territory）。
+
+### 修复
+1. `detectProxyEnv()` 在 `withHanaPiSdkEnv()` 中自动检测本地 Clash for Windows 代理配置，注入 `HTTPS_PROXY` 环境变量
+2. Pi SDK 的 `exchangeAuthorizationCode()` 和 `refreshAccessToken()` 读取 `HTTPS_PROXY`，使用 `undici.ProxyAgent` 将 token 请求路由通过 Clash 代理发出
+3. 验证：不加代理 → 403；加代理 → 401（无效 code，预期行为）
+
 ## 改动量统计
 
 | 文件 | 新增行 | 删除行 |

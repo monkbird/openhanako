@@ -66,14 +66,11 @@ export default function (app, ctx) {
     { id: "openai-codex-oauth", displayName: "OpenAI Codex (OAuth)" },
   ];
 
-  // Known image models per provider (mirrors known-models.json type:image entries)
+  // Known image models per provider
+  // Note: Volcengine ARK requires user-created endpoint IDs (ep-xxx) — we can't hardcode them.
+  // Users add their endpoint ID directly in the Media settings via custom input.
   const KNOWN_IMAGE_MODELS = {
-    volcengine: [
-      { id: "doubao-seedream-3-0-t2i", name: "Seedream 3.0" },
-      { id: "doubao-seedream-4-0-250828", name: "Seedream 4.0" },
-      { id: "doubao-seedream-4-5-251128", name: "Seedream 4.5" },
-      { id: "doubao-seedream-5-0-lite-260128", name: "Seedream 5.0 Lite" },
-    ],
+    volcengine: [],
     openai: [
       { id: "gpt-image-2", name: "GPT Image 2" },
       { id: "gpt-image-1", name: "GPT Image 1" },

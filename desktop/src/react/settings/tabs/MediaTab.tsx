@@ -55,7 +55,7 @@ export function MediaTab() {
       await hanaFetch(`/api/plugins/image-gen/config?agentId=${agentId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates),
+        body: JSON.stringify({ values: updates }),
       });
       setConfig(prev => ({ ...prev, ...updates }));
       showToast(t('settings.saved'), 'success');

@@ -70,8 +70,34 @@ export const volcengineImageAdapter = {
 
     const { apiKey, baseUrl } = creds;
 
-    // 2. Resolve model
-    const modelId = params.model || ctx.config?.get?.("defaultImageModel")?.id || "seedream-3-0";
+    // 2. Resolve model — use provider's configured endpoint IDs (ARK endpoint ID), not hardcoded names
+    let modelId = params.model;
+    if (!modelId) {
+      modelId = ctx.config?.get?.("defaultImageModel")?.id;
+    }
+    if (!modelId) {
+      // Fall back to provider's image model list (user's actual ARK endpoint IDs)
+      try {
+        const { models } = await ctx.bus.request("provider:models-by-type", { type: "image", providerId: "volcengine" });
+        if (models?.length > 0) {
+          modelId = models[0].id;
+        }
+      } catch {}
+    }
+    if (!modelId) {
+      // Try coding plan provider's image models
+      try {
+        const { models } = await ctx.bus.request("provider:models-by-type", { type: "image", providerId: "volcengine-coding" });
+        if (models?.length > 0) {
+          modelId = models[0].id;
+        }
+      } catch {}
+    }
+    if (!modelId) {
+      throw new Error(
+        `未找到图片生成模型。请在 设置 → Providers → 火山引擎 中添加你的 ARK 端点 ID（ep-xxxx）作为模型，或通过工具参数指定 model。`
+      );
+    }
 
     // 3. Get provider defaults
     const allDefaults = ctx.config?.get?.("providerDefaults") || {};

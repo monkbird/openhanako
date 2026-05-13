@@ -181,8 +181,16 @@ export function MediaProviderDetail({ providerId, provider, config, onSaveConfig
                   </button>
                 );
               })}
-              {filtered.length === 0 && (
+              {filtered.length === 0 && !search && (
                 <div className={styles['pv-model-dropdown-empty']}>{t('settings.providers.noModels')}</div>
+              )}
+              {filtered.length === 0 && search && (
+                <button
+                  className={styles['pv-model-dropdown-option']}
+                  onClick={() => addModel(search.trim())}
+                >
+                  <span className={styles['pv-model-dropdown-option-name']}>+ \u6dfb\u52a0 "{search.trim()}"</span>
+                </button>
               )}
             </div>
           </div>,
